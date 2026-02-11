@@ -1,0 +1,77 @@
+he public API is returning all Behavioral AI fields correctly. Here's how external apps should use the agent data to implement CALM behavior:
+
+Deploying Agents via API - CALM Implementation Guide
+API Response Structure
+When you call /api/agents/{id}/public, you receive:
+
+{
+  "id": 22,
+  "name": "Manifestation Agent",
+  "description": "...",
+  "role": "...",
+  "capabilities": ["..."],
+  
+  // BEHAVIORAL AI FRAMEWORK
+  "characterBible": {
+    "coreIdentity": "Who the agent is",
+    "personalityTraits": {
+      "openness": 85,
+      "conscientiousness": 90,
+      "extraversion": 70,
+      "agreeableness": 80,
+      "neuroticism": 20
+    },
+    "communicationStyle": {
+      "tone": "professional",
+      "formality": "formal",
+      "verbosity": "detailed"
+    },
+    "knowledgeDomains": ["domain1", "domain2"],
+    "ethicalBoundaries": ["boundary1", "boundary2"]
+  },
+  
+  "constitutionalRules": {
+    "behavioralRules": [
+      {"id": "1", "rule": "Always cite sources", "priority": "critical", "category": "ethics"}
+    ],
+    "safetyBoundaries": ["Never provide medical advice"],
+    "prohibitedBehaviors": ["Never impersonate real people"]
+  },
+  
+  "memoryArchitecture": {
+    "shortTermCapacity": 10,
+    "longTermEnabled": true,
+    "contextWindowSize": 8000,
+    "memoryDecayRate": 0.1
+  },
+  
+  "consistencyMetrics": {
+    "personalityDriftThreshold": 0.15,
+    "factualAccuracyTarget": 0.95,
+    "responseConsistencyTarget": 0.90
+  }
+}
+Using in Your App's System Prompt
+// Fetch agent config
+const response = await fetch('https://your-url/api/agents/22/public');
+const agent = await response.json();
+// Build CALM-compliant system prompt
+const systemPrompt = `
+# IDENTITY
+You are ${agent.name}. ${agent.characterBible.coreIdentity}
+# ROLE
+${agent.role}
+# PERSONALITY (Big Five)
+- Openness: ${agent.characterBible.personalityTraits.openness}/100
+- Conscientiousness: ${agent.characterBible.personalityTraits.conscientiousness}/100
+- Communication: ${agent.characterBible.communicationStyle.tone}, ${agent.characterBible.communicationStyle.formality}
+# CONSTITUTIONAL RULES (MUST FOLLOW)
+${agent.constitutionalRules.behavioralRules.map(r => `- [${r.priority}] ${r.rule}`).join('\n')}
+# SAFETY BOUNDARIES (NEVER VIOLATE)
+${agent.constitutionalRules.safetyBoundaries.map(b => `- ${b}`).join('\n')}
+# PROHIBITED BEHAVIORS
+${agent.constitutionalRules.prohibitedBehaviors.map(p => `- ${p}`).join('\n')}
+# CAPABILITIES
+${agent.capabilities.join('\n')}
+`;
+The API is ready. Your external apps can fetch agent configurations and build CALM-compliant prompts using the Character Bible and Constitutional Rules. Would you like me to add any additional fields or create a helper endpoint that returns a pre-formatted system prompt?
