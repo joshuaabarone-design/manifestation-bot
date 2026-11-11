@@ -1,13 +1,17 @@
 import type { CorsOptions } from "cors";
 
-/** Origins a Capacitor iOS WebView uses, plus local dev. */
-export const NATIVE_ORIGINS = ["capacitor://localhost", "ionic://localhost", "http://localhost", "https://localhost"];
+/** Origins a Capacitor iOS WebView uses. */
+export const NATIVE_ORIGINS = ["capacitor://localhost", "ionic://localhost"];
+/** Local dev servers; never allowed in production, where any local page could otherwise call the API. */
+export const DEV_ORIGINS = ["http://localhost", "https://localhost", "http://localhost:5000", "http://localhost:5173"];
 
 export function allowedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
   const extra = [env.WEB_ORIGIN, ...(env.CORS_ORIGINS ?? "").split(",")]
     .map((o) => (o ?? "").trim().replace(/\/+$/, ""))
-    .filter(Boolean);
-  return Array.from(new Set([...NATIVE_ORIGINS, ...extra]));
+    // Never allow wildcards or the opaque "null" origin with credentials.
+    .filter((o) => !!o && o !== "*" && o !== "null" && /^[a-z][a-z0-9+.-]*:\/\/[^/\s*]+$/i.test(o));
+  const dev = env.NODE_ENV === "production" ? [] : DEV_ORIGINS;
+  return Array.from(new Set([...NATIVE_ORIGINS, ...dev, ...extra]));
 }
 
 export function corsOptions(env: NodeJS.ProcessEnv = process.env): CorsOptions {

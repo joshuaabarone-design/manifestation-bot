@@ -76,6 +76,11 @@ describe("Sign in with Apple identity-token verification", () => {
     await expect(verifyAppleIdentityToken(t, { rawNonce: nonce })).rejects.toBeInstanceOf(AppleVerificationError);
   });
 
+  it("requires a nonce (no replay of tokens minted without one)", async () => {
+    const t = await appleToken({ sub: "x", nonce: sha256Hex(nonce) });
+    await expect(verifyAppleIdentityToken(t)).rejects.toThrow(/nonce/);
+  });
+
   it("refuses when Sign in with Apple is not configured", async () => {
     const t = await appleToken({ sub: "x", nonce: sha256Hex(nonce) });
     await expect(verifyAppleIdentityToken(t, { rawNonce: nonce, audiences: [] })).rejects.toThrow(/not configured/);

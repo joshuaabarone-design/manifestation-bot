@@ -65,11 +65,12 @@ export async function verifyAppleIdentityToken(identityToken: string, opts: Veri
   if (typeof payload.sub !== "string" || !payload.sub) {
     throw new AppleVerificationError("Apple identity token has no subject");
   }
-  // Nonce binds the token to this sign-in attempt (replay protection).
-  if (opts.rawNonce !== undefined) {
-    if (typeof payload.nonce !== "string" || payload.nonce !== sha256Hex(opts.rawNonce)) {
-      throw new AppleVerificationError("Apple identity token nonce mismatch");
-    }
+  // Nonce binds the token to this sign-in attempt (replay protection). Always required.
+  if (!opts.rawNonce) {
+    throw new AppleVerificationError("Apple sign-in requires a nonce");
+  }
+  if (typeof payload.nonce !== "string" || payload.nonce !== sha256Hex(opts.rawNonce)) {
+    throw new AppleVerificationError("Apple identity token nonce mismatch");
   }
   const asBool = (v: unknown) => v === true || v === "true";
   return {
