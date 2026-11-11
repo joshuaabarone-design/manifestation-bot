@@ -1,0 +1,3 @@
+# Values come from the environment so nothing account-specific is committed.
+app_identifier(ENV.fetch("APP_IDENTIFIER", "com.joshuabarone.manifestation")) # PLACEHOLDER until the App ID is registered
+team_id(ENV["TEAM_ID"]) if ENV["TEAM_ID"]                                       # PLACEHOLDER: Apple Developer Team ID

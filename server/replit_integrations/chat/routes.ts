@@ -1,4 +1,5 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, RequestHandler } from "express";
+import { screenInput, screenOutput } from "../../ai-safety";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
 
@@ -7,9 +8,9 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-export function registerChatRoutes(app: Express): void {
+export function registerChatRoutes(app: Express, guard: RequestHandler[] = []): void {
   // Get all conversations
-  app.get("/api/conversations", async (req: Request, res: Response) => {
+  app.get("/api/conversations", ...guard, async (req: Request, res: Response) => {
     try {
       const conversations = await chatStorage.getAllConversations();
       res.json(conversations);
@@ -20,7 +21,7 @@ export function registerChatRoutes(app: Express): void {
   });
 
   // Get single conversation with messages
-  app.get("/api/conversations/:id", async (req: Request, res: Response) => {
+  app.get("/api/conversations/:id", ...guard, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       const conversation = await chatStorage.getConversation(id);
@@ -36,7 +37,7 @@ export function registerChatRoutes(app: Express): void {
   });
 
   // Create new conversation
-  app.post("/api/conversations", async (req: Request, res: Response) => {
+  app.post("/api/conversations", ...guard, async (req: Request, res: Response) => {
     try {
       const { title } = req.body;
       const conversation = await chatStorage.createConversation(title || "New Chat");
@@ -48,7 +49,7 @@ export function registerChatRoutes(app: Express): void {
   });
 
   // Delete conversation
-  app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
+  app.delete("/api/conversations/:id", ...guard, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       await chatStorage.deleteConversation(id);
@@ -60,10 +61,11 @@ export function registerChatRoutes(app: Express): void {
   });
 
   // Send message and get AI response (streaming)
-  app.post("/api/conversations/:id/messages", async (req: Request, res: Response) => {
+  app.post("/api/conversations/:id/messages", ...guard, async (req: Request, res: Response) => {
     try {
       const conversationId = parseInt(req.params.id);
       const { content } = req.body;
+      if (await screenInput(res, String(content ?? ""))) return;
 
       // Save user message
       await chatStorage.createMessage(conversationId, "user", content);
@@ -80,7 +82,8 @@ export function registerChatRoutes(app: Express): void {
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      // Stream response from OpenAI
+      // Buffer the model output, moderate it, then emit it as one SSE event (the wire format is
+      // unchanged for clients; nothing unmoderated is ever shown).
       const stream = await openai.chat.completions.create({
         model: "gpt-5.1",
         messages: chatMessages,
@@ -88,15 +91,13 @@ export function registerChatRoutes(app: Express): void {
         max_completion_tokens: 2048,
       });
 
-      let fullResponse = "";
-
+      let buffered = "";
       for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          fullResponse += content;
-          res.write(`data: ${JSON.stringify({ content })}\n\n`);
-        }
+        buffered += chunk.choices[0]?.delta?.content || "";
       }
+      const screened = await screenOutput(buffered);
+      const fullResponse = screened.text;
+      res.write(`data: ${JSON.stringify({ content: fullResponse, ...(screened.flagged ? { moderated: true } : {}) })}\n\n`);
 
       // Save assistant message
       await chatStorage.createMessage(conversationId, "assistant", fullResponse);

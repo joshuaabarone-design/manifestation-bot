@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Layout } from "@/components/layout/Layout";
 import { useAffirmations, useGenerateAffirmation, useCreateAffirmation } from "@/hooks/use-affirmations";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Save, Copy, RefreshCw } from "lucide-react";
+import { Sparkles, Save, Copy, RefreshCw, Share2 } from "lucide-react";
+import { shareText } from "@/lib/native";
+import { ReportResponseButton } from "@/components/compliance/ReportResponseButton";
 import { useForm } from "react-hook-form";
 import { Card } from "@/components/ui/card";
 import { format } from "date-fns";
@@ -53,7 +55,21 @@ export default function Affirmations() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {affirmations?.map((affirmation) => (
           <div key={affirmation.id} className="glass-panel p-6 rounded-2xl border border-white/5 hover:border-primary/20 transition-all group relative">
-            <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Always visible on touch screens; hover-reveal on desktop. */}
+            <div className="absolute top-4 right-4 flex gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 hover:bg-white/10"
+                onClick={async () => {
+                  const result = await shareText(`"${affirmation.content}"`);
+                  if (result === "copied") toast({ title: "Copied to clipboard" });
+                }}
+                data-testid={`button-share-affirmation-${affirmation.id}`}
+                aria-label="Share affirmation"
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
               <Button 
                 variant="ghost" 
                 size="icon" 
@@ -69,7 +85,7 @@ export default function Affirmations() {
               </Button>
             </div>
             
-            <p className="font-display text-xl leading-relaxed text-white mb-4">
+            <p className="font-display text-xl leading-relaxed text-white mb-4 pr-16">
               "{affirmation.content}"
             </p>
             
@@ -112,6 +128,9 @@ function GeneratedAffirmationCard({ content, onSave, onDismiss }: { content: str
           Save to Collection
         </Button>
       </div>
+      <div className="relative z-10 mt-4 flex justify-center">
+        <ReportResponseButton feature="affirmation" content={content} />
+      </div>
     </div>
   );
 }
@@ -124,9 +143,13 @@ function GenerateAffirmationDialog({ onGenerate }: { onGenerate: (text: string) 
   const handleGenerate = () => {
     generate.mutate({ theme }, {
       onSuccess: (data) => {
-        onGenerate(data.affirmation);
         setOpen(false);
-      }
+        // Crisis responses open the support-resources dialog instead of an affirmation card.
+        if (!data.crisis) onGenerate(data.affirmation);
+      },
+      onError: (error: Error) => {
+        toast({ title: "Couldn't generate an affirmation", description: error.message, variant: "destructive" });
+      },
     });
   };
 

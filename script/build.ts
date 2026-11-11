@@ -15,6 +15,7 @@ const allowlist = [
   "express",
   "express-rate-limit",
   "express-session",
+  "jose", // ESM-only; bundle so the CJS server output can load it
   "jsonwebtoken",
   "memorystore",
   "multer",

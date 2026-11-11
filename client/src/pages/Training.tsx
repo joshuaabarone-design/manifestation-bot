@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout/Layout";
+import { AiReportsPanel } from "@/components/settings/AiReportsPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -445,6 +446,7 @@ export default function Training() {
           </Card>
         )}
       </div>
+      <AiReportsPanel />
     </Layout>
   );
 }

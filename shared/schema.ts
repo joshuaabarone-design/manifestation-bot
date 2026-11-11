@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, boolean, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -93,8 +93,10 @@ export const journalEntries = pgTable("journal_entries", {
   content: text("content").notNull(),
   mood: text("mood"), // e.g., 'happy', 'neutral', 'sad'
   manifestationFocus: text("manifestation_focus"),
+  // Idempotency key for writes queued offline on the iOS app (replayed on reconnect).
+  clientId: text("client_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [uniqueIndex("UQ_journal_user_client").on(table.userId, table.clientId)]);
 
 export const visionBoards = pgTable("vision_boards", {
   id: serial("id").primaryKey(),
@@ -123,10 +125,26 @@ export const reminderSettings = pgTable("reminder_settings", {
   deliveryMethod: text("delivery_method").default("app"), // 'app', 'email', 'sms', 'both'
   email: text("email"),
   phoneNumber: text("phone_number"),
+  // SMS consent (TCPA/CTIA): when and to what wording the user agreed, and STOP handling.
+  smsConsentAt: timestamp("sms_consent_at"),
+  smsConsentText: text("sms_consent_text"),
+  smsOptedOutAt: timestamp("sms_opted_out_at"),
   lastSentAt: timestamp("last_sent_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// "Report this response" on AI output (Guideline 1.2). Reviewed by admins on the Training page.
+export const aiReports = pgTable("ai_reports", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  feature: text("feature").notNull(), // 'advice' | 'affirmation' | 'image' | 'chat'
+  content: text("content").notNull(),
+  reason: text("reason").notNull(), // 'harmful' | 'inaccurate' | 'offensive' | 'other'
+  details: text("details"),
+  status: text("status").notNull().default("open"), // 'open' | 'reviewed'
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [index("IDX_ai_reports_status").on(table.status)]);
 
 // === RELATIONS ===
 export const visionBoardsRelations = relations(visionBoards, ({ many }) => ({
@@ -166,9 +184,16 @@ export const ritualCompletionsRelations = relations(ritualCompletions, ({ one })
 export const insertGoalSchema = createInsertSchema(goals).omit({ id: true, createdAt: true, updatedAt: true, userId: true });
 export const insertAffirmationSchema = createInsertSchema(affirmations).omit({ id: true, createdAt: true, userId: true });
 export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({ id: true, createdAt: true, userId: true });
+export const insertAiReportSchema = createInsertSchema(aiReports).omit({ id: true, createdAt: true, userId: true, status: true }).extend({
+  feature: z.enum(["advice", "affirmation", "image", "chat"]),
+  reason: z.enum(["harmful", "inaccurate", "offensive", "other"]),
+  content: z.string().min(1).max(20000),
+  details: z.string().max(2000).optional().nullable(),
+});
 export const insertVisionBoardSchema = createInsertSchema(visionBoards).omit({ id: true, createdAt: true, userId: true });
 export const insertVisionBoardImageSchema = createInsertSchema(visionBoardImages).omit({ id: true, createdAt: true });
-export const insertReminderSettingsSchema = createInsertSchema(reminderSettings).omit({ id: true, createdAt: true, updatedAt: true, userId: true, lastSentAt: true });
+// Consent and opt-out fields are server-managed: clients send `smsConsent: true` instead.
+export const insertReminderSettingsSchema = createInsertSchema(reminderSettings).omit({ id: true, createdAt: true, updatedAt: true, userId: true, lastSentAt: true, smsConsentAt: true, smsConsentText: true, smsOptedOutAt: true });
 export const insertChatConversationSchema = createInsertSchema(chatConversations).omit({ id: true, createdAt: true, updatedAt: true, userId: true });
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
 export const insertUserStreaksSchema = createInsertSchema(userStreaks).omit({ id: true, createdAt: true, updatedAt: true, userId: true });
@@ -196,7 +221,7 @@ export type CreateVisionBoardRequest = z.infer<typeof insertVisionBoardSchema>;
 
 export type VisionBoardImage = typeof visionBoardImages.$inferSelect;
 export type InsertVisionBoardImage = z.infer<typeof insertVisionBoardImageSchema> & { visionBoardId: number };
-export type AddVisionBoardImageRequest = z.infer<typeof insertVisionBoardImageSchema>;
+export type AddVisionBoardImageRequest = Omit<z.infer<typeof insertVisionBoardImageSchema>, "visionBoardId">;
 
 
 export type ManifestationAdviceResponse = {
@@ -234,3 +259,6 @@ export type InsertRitualCompletion = z.infer<typeof insertRitualCompletionSchema
 
 export type Milestone = { id: string; text: string; completed: boolean };
 export type RitualStep = { id: string; text: string; duration?: number };
+
+export type AiReport = typeof aiReports.$inferSelect;
+export type CreateAiReportRequest = z.infer<typeof insertAiReportSchema>;

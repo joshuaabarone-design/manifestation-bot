@@ -1,3 +1,4 @@
+import { isNative } from "@/lib/platform";
 export function isUnauthorizedError(error: Error): boolean {
   return /^401: .*Unauthorized/.test(error.message);
 }
@@ -12,6 +13,6 @@ export function redirectToLogin(toast?: (options: { title: string; description: 
     });
   }
   setTimeout(() => {
-    window.location.href = "/api/login";
+    window.location.href = isNative ? "/auth" : "/api/login";
   }, 500);
 }

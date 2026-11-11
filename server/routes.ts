@@ -18,6 +18,19 @@ import {
   behavioralSearch,
   clearAgentCache
 } from "./agentforge";
+import { requireAdmin } from "./auth/admin";
+import {
+  requireAiConsent, recordAiConsent, hasAiConsent, screenInput, screenOutput,
+  CRISIS_RESOURCES,
+} from "./ai-safety";
+import { deleteAccount } from "./account";
+import { registerSmsRoutes, normalizePhone } from "./sms";
+import { db } from "./db";
+import { aiReports, insertAiReportSchema } from "@shared/schema";
+import { SMS_CONSENT_TEXT, complianceApi } from "@shared/routes";
+import { desc, eq } from "drizzle-orm";
+
+const uid = (req: any): string => req.user.claims.sub;
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -32,9 +45,11 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   
-  // Register Integration Routes
-  registerChatRoutes(app);
-  registerImageRoutes(app); // We'll wrap this with auth for custom endpoints if needed
+  // Register Integration Routes. These Replit templates are not user-scoped (no user_id), so they
+  // are restricted to admins; the consumer app uses /api/chat/* and /api/vision-boards/* instead.
+  registerChatRoutes(app, [isAuthenticated, requireAdmin]);
+  registerImageRoutes(app, [isAuthenticated, requireAdmin]);
+  registerSmsRoutes(app);
 
   // === APP ROUTES ===
 
@@ -64,6 +79,10 @@ export async function registerRoutes(
 
   app.patch(api.goals.update.path, isAuthenticated, async (req, res) => {
     try {
+      const existing = await storage.getGoal(Number(req.params.id));
+      if (!existing || existing.userId !== uid(req)) {
+        return res.status(404).json({ message: "Goal not found" });
+      }
       const input = api.goals.update.input.parse(req.body);
       const goal = await storage.updateGoal(Number(req.params.id), input);
       res.json(goal);
@@ -79,6 +98,10 @@ export async function registerRoutes(
   });
 
   app.delete(api.goals.delete.path, isAuthenticated, async (req, res) => {
+    const existing = await storage.getGoal(Number(req.params.id));
+    if (!existing || existing.userId !== uid(req)) {
+      return res.status(404).json({ message: "Goal not found" });
+    }
     await storage.deleteGoal(Number(req.params.id));
     res.status(204).send();
   });
@@ -108,9 +131,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post(api.affirmations.generate.path, isAuthenticated, async (req, res) => {
+  app.post(api.affirmations.generate.path, isAuthenticated, requireAiConsent, async (req, res) => {
     try {
       const { theme, mood } = req.body;
+      if (await screenInput(res, [theme, mood].filter(Boolean).join("\n"), (message) => ({
+        affirmation: message, crisis: true, resources: CRISIS_RESOURCES,
+      }))) return;
       
       const response = await openai.chat.completions.create({
         model: "gpt-5.1",
@@ -127,8 +153,9 @@ export async function registerRoutes(
         max_completion_tokens: 100
       });
 
-      const affirmation = response.choices[0].message.content || "I am capable of achieving anything I set my mind to.";
-      res.json({ affirmation });
+      const raw = response.choices[0].message.content || "I am capable of achieving anything I set my mind to.";
+      const screened = await screenOutput(raw);
+      res.json({ affirmation: screened.text, ...(screened.selfHarm ? { crisis: true, resources: CRISIS_RESOURCES } : {}), ...(screened.flagged ? { moderated: true } : {}) });
 
     } catch (error) {
       console.error("Error generating affirmation:", error);
@@ -171,7 +198,7 @@ export async function registerRoutes(
 
   app.get(api.visionBoards.get.path, isAuthenticated, async (req, res) => {
     const board = await storage.getVisionBoard(Number(req.params.id));
-    if (!board) {
+    if (!board || board.userId !== uid(req)) {
       return res.status(404).json({ message: "Vision board not found" });
     }
     res.json(board);
@@ -196,6 +223,10 @@ export async function registerRoutes(
 
   app.post(api.visionBoards.addImage.path, isAuthenticated, async (req, res) => {
     try {
+      const board = await storage.getVisionBoard(Number(req.params.id));
+      if (!board || board.userId !== uid(req)) {
+        return res.status(404).json({ message: "Vision board not found" });
+      }
       const input = api.visionBoards.addImage.input.parse(req.body);
       const image = await storage.addVisionBoardImage({ ...input, visionBoardId: Number(req.params.id) });
       res.status(201).json(image);
@@ -213,10 +244,12 @@ export async function registerRoutes(
   // Proxy the image generation for vision boards to enforce auth/context if needed
   // Or just use the integration route directly if it was public (but we want it authenticated usually)
   // The integration route /api/generate-image is generic. Let's make a specific one that feels part of the app flow
-  app.post(api.visionBoards.generateImage.path, isAuthenticated, async (req, res) => {
+  app.post(api.visionBoards.generateImage.path, isAuthenticated, requireAiConsent, async (req, res) => {
     try {
        const { prompt } = req.body;
        if (!prompt) return res.status(400).json({ message: "Prompt required" });
+       // Prompt moderation; gpt-image-1 additionally applies OpenAI's own image safety system.
+       if (await screenInput(res, String(prompt))) return;
 
        const response = await openai.images.generate({
         model: "gpt-image-1",
@@ -246,10 +279,14 @@ export async function registerRoutes(
 
 
   // Manifestation Advice (AI) - Using AgentForge agent config with goal context
-  app.post(api.manifestation.getAdvice.path, isAuthenticated, async (req, res) => {
+  app.post(api.manifestation.getAdvice.path, isAuthenticated, requireAiConsent, async (req, res) => {
     try {
       const userId = (req.user as any).claims.sub;
       const { situation, goal, goalId } = req.body;
+      if (await screenInput(res, [situation, goal].filter(Boolean).join("\n"), (message) => ({
+        advice: message, suggestedAffirmations: [], suggestedActions: [], nextSteps: [],
+        crisis: true, resources: CRISIS_RESOURCES,
+      }))) return;
 
       // If goalId provided, fetch full goal context
       let goalContext = goal || "General abundance/peace";
@@ -306,7 +343,19 @@ Response Format (JSON):
       });
 
       const content = JSON.parse(response.choices[0].message.content || "{}");
-      res.json(content);
+      const asList = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+      const advice = String(content.advice ?? "");
+      const suggestedAffirmations = asList(content.suggestedAffirmations);
+      const suggestedActions = asList(content.suggestedActions);
+      const nextSteps = asList(content.nextSteps);
+      const screened = await screenOutput([advice, ...suggestedAffirmations, ...suggestedActions, ...nextSteps].join("\n"));
+      if (screened.flagged) {
+        return res.json({
+          advice: screened.text, suggestedAffirmations: [], suggestedActions: [], nextSteps: [], moderated: true,
+          ...(screened.selfHarm ? { crisis: true, resources: CRISIS_RESOURCES } : {}),
+        });
+      }
+      res.json({ ...content, advice, suggestedAffirmations, suggestedActions, nextSteps });
 
     } catch (error) {
       console.error("Error getting advice:", error);
@@ -334,7 +383,7 @@ Response Format (JSON):
   });
 
   // Refresh agent config from AgentForge (clears cache)
-  app.post("/api/agent-config/refresh", isAuthenticated, async (req, res) => {
+  app.post("/api/agent-config/refresh", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const agentId = req.body.agentId || AGENT_IDS.MANIFESTATION;
       const config = await refreshAgentConfig(agentId);
@@ -358,7 +407,7 @@ Response Format (JSON):
   });
 
   // Get all registered agents
-  app.get("/api/agents", isAuthenticated, async (req, res) => {
+  app.get("/api/agents", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const agents = await getAllAgents();
       const agentList = Object.entries(agents).map(([key, config]) => ({
@@ -380,7 +429,7 @@ Response Format (JSON):
   });
 
   // Get specific agent by ID
-  app.get("/api/agents/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/agents/:id", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const agentId = parseInt(req.params.id);
       if (isNaN(agentId)) {
@@ -408,7 +457,7 @@ Response Format (JSON):
   });
 
   // Refresh all agents from AgentForge
-  app.post("/api/agents/refresh-all", isAuthenticated, async (req, res) => {
+  app.post("/api/agents/refresh-all", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       clearAgentCache();
       const agents = await getAllAgents();
@@ -432,7 +481,7 @@ Response Format (JSON):
   });
 
   // Behavioral search endpoint
-  app.post("/api/behavioral-search", isAuthenticated, async (req, res) => {
+  app.post("/api/behavioral-search", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const { query, options } = req.body;
       if (!query) {
@@ -450,7 +499,7 @@ Response Format (JSON):
   const { runTrainingTest, runTrainingSuite, getTrainingRecommendations } = await import("./agent-training");
 
   // Run a single training test
-  app.post("/api/training/test", isAuthenticated, async (req, res) => {
+  app.post("/api/training/test", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const { prompt, agentId } = req.body;
       if (!prompt) {
@@ -465,7 +514,7 @@ Response Format (JSON):
   });
 
   // Run full training suite
-  app.post("/api/training/suite", isAuthenticated, async (req, res) => {
+  app.post("/api/training/suite", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const { agentId } = req.body;
       console.log("[training] Running training suite for agent:", agentId || AGENT_IDS.MANIFESTATION);
@@ -479,7 +528,7 @@ Response Format (JSON):
   });
 
   // Get training recommendations from Training Orchestrator
-  app.post("/api/training/recommendations", isAuthenticated, async (req, res) => {
+  app.post("/api/training/recommendations", isAuthenticated, requireAdmin, async (req, res) => {
     try {
       const { results } = req.body;
       if (!results || !Array.isArray(results)) {
@@ -503,8 +552,32 @@ Response Format (JSON):
   app.put(api.reminders.update.path, isAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any).claims.sub;
-      const input = api.reminders.update.input.parse(req.body);
-      const settings = await storage.upsertReminderSettings(userId, input);
+      const { smsConsent, ...input } = api.reminders.update.input.parse(req.body);
+      const existing = await storage.getReminderSettings(userId);
+      const updates: Record<string, unknown> = { ...input };
+      if (typeof input.phoneNumber === "string" && input.phoneNumber) {
+        updates.phoneNumber = normalizePhone(input.phoneNumber);
+      }
+      const numberChanged = updates.phoneNumber !== undefined && updates.phoneNumber !== existing?.phoneNumber;
+      const isSms = (m: unknown) => m === "sms" || m === "both";
+      const deliveringSms = isSms(input.deliveryMethod ?? existing?.deliveryMethod);
+      if (smsConsent === true) {
+        updates.smsConsentAt = new Date();
+        updates.smsConsentText = SMS_CONSENT_TEXT;
+        updates.smsOptedOutAt = null;
+      } else if (smsConsent === false || numberChanged) {
+        // Withdrawing consent, or a new number that has not consented yet.
+        updates.smsConsentAt = null;
+        updates.smsConsentText = null;
+      }
+      const consentAfter = smsConsent === true || (!numberChanged && smsConsent !== false && !!existing?.smsConsentAt);
+      if (deliveringSms && (isSms(input.deliveryMethod) || numberChanged) && !consentAfter) {
+        return res.status(400).json({
+          message: "Please confirm the SMS consent checkbox to receive text reminders.",
+          field: "smsConsent",
+        });
+      }
+      const settings = await storage.upsertReminderSettings(userId, updates as any);
       res.json(settings);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -521,10 +594,16 @@ Response Format (JSON):
   app.post("/api/reminders/send-sms", isAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any).claims.sub;
-      const { phoneNumber, affirmation } = req.body;
+      const { affirmation } = req.body;
+      // Only the user's own number, and only with recorded opt-in consent and no STOP.
+      const settings = await storage.getReminderSettings(userId);
+      const phoneNumber = settings?.phoneNumber;
 
       if (!phoneNumber || !affirmation) {
-        return res.status(400).json({ message: "Phone number and affirmation are required" });
+        return res.status(400).json({ message: "A saved phone number and an affirmation are required" });
+      }
+      if (!settings?.smsConsentAt || settings.smsOptedOutAt) {
+        return res.status(403).json({ message: "SMS consent is required (or you replied STOP)." });
       }
 
       const result = await sendAffirmationReminder(phoneNumber, affirmation);
@@ -549,7 +628,7 @@ Response Format (JSON):
 
   app.get(api.chat.getConversation.path, isAuthenticated, async (req, res) => {
     const conversation = await storage.getChatConversation(Number(req.params.id));
-    if (!conversation) {
+    if (!conversation || conversation.userId !== uid(req)) {
       return res.status(404).json({ message: "Conversation not found" });
     }
     res.json(conversation);
@@ -571,6 +650,10 @@ Response Format (JSON):
 
   app.post(api.chat.addMessage.path, isAuthenticated, async (req, res) => {
     try {
+      const conversation = await storage.getChatConversation(Number(req.params.id));
+      if (!conversation || conversation.userId !== uid(req)) {
+        return res.status(404).json({ message: "Conversation not found" });
+      }
       const input = api.chat.addMessage.input.parse(req.body);
       const message = await storage.addChatMessage({ ...input, conversationId: Number(req.params.id) });
       res.status(201).json(message);
@@ -605,6 +688,10 @@ Response Format (JSON):
   });
 
   app.delete(api.chat.deleteConversation.path, isAuthenticated, async (req, res) => {
+    const conversation = await storage.getChatConversation(Number(req.params.id));
+    if (!conversation || conversation.userId !== uid(req)) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
     await storage.deleteChatConversation(Number(req.params.id));
     res.status(204).send();
   });
@@ -655,6 +742,10 @@ Response Format (JSON):
   app.post(api.rituals.complete.path, isAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any).claims.sub;
+      const owned = (await storage.getDailyRituals(userId)).some((r) => r.id === Number(req.params.id));
+      if (!owned) {
+        return res.status(404).json({ message: "Ritual not found" });
+      }
       const input = api.rituals.complete.input.parse(req.body);
       const completion = await storage.completeRitual(userId, Number(req.params.id), input.notes);
       res.status(201).json(completion);
@@ -670,6 +761,62 @@ Response Format (JSON):
     const userId = (req.user as any).claims.sub;
     const completions = await storage.getRitualCompletions(userId, Number(req.params.id));
     res.json(completions);
+  });
+
+  // === APP STORE COMPLIANCE ===
+
+  // In-app account deletion (5.1.1(v)): hard-deletes all user rows, then revokes SIWA tokens.
+  app.delete(complianceApi.deleteAccount.path, isAuthenticated, async (req, res) => {
+    try {
+      const result = await deleteAccount(uid(req));
+      const finish = () => res.json({ deleted: true, appleRevoked: result.appleRevoked });
+      if (typeof (req as any).logout === "function" && !(req.user as any)?.viaBearer) {
+        (req as any).logout(() => {
+          req.session?.destroy(() => finish());
+        });
+      } else {
+        finish();
+      }
+    } catch (error) {
+      console.error("Account deletion failed:", (error as Error)?.message);
+      res.status(500).json({ message: "Account deletion failed. Please try again or contact support." });
+    }
+  });
+
+  // One-time AI data-sharing consent (5.1.2).
+  app.get(complianceApi.aiConsent.path, isAuthenticated, async (req, res) => {
+    res.json({ consented: await hasAiConsent(uid(req)) });
+  });
+  app.post(complianceApi.aiConsent.path, isAuthenticated, async (req, res) => {
+    const granted = req.body?.granted !== false;
+    await recordAiConsent(uid(req), granted);
+    res.json({ consented: granted });
+  });
+
+  // "Report this response" on AI output (1.2).
+  app.post(complianceApi.aiReport.path, isAuthenticated, async (req, res) => {
+    try {
+      const input = insertAiReportSchema.parse(req.body);
+      const [row] = await db.insert(aiReports).values({ ...input, userId: uid(req) }).returning({ id: aiReports.id });
+      res.status(201).json({ id: row.id, message: "Thanks. Your report was sent for review." });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
+      }
+      throw err;
+    }
+  });
+
+  // Moderation queue for admins (shown on the Training page).
+  app.get(complianceApi.adminAiReports.path, isAuthenticated, requireAdmin, async (_req, res) => {
+    const rows = await db.select().from(aiReports).orderBy(desc(aiReports.createdAt)).limit(200);
+    res.json(rows);
+  });
+  app.patch("/api/admin/ai-reports/:id", isAuthenticated, requireAdmin, async (req, res) => {
+    const status = req.body?.status === "open" ? "open" : "reviewed";
+    const [row] = await db.update(aiReports).set({ status }).where(eq(aiReports.id, Number(req.params.id))).returning();
+    if (!row) return res.status(404).json({ message: "Report not found" });
+    res.json(row);
   });
 
   return httpServer;

@@ -7,6 +7,7 @@ import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { authStorage } from "./storage";
+import { extractBearer, verifyAccessToken } from "../../auth/tokens";
 
 const getOidcConfig = memoize(
   async () => {
@@ -66,6 +67,26 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  passport.serializeUser((user: Express.User, cb) => cb(null, user));
+  passport.deserializeUser((user: Express.User, cb) => {
+    if (!user || typeof user !== 'object') {
+      return cb(null, false);
+    }
+    cb(null, user);
+  });
+
+  // Replit Auth is a web-only sign-in option. When the API is hosted outside Replit (no REPL_ID),
+  // the OIDC routes degrade gracefully to the email/password + Sign in with Apple screen.
+  if (!process.env.REPL_ID) {
+    console.log("[auth] REPL_ID not set: Replit Auth disabled, /api/login redirects to /auth");
+    app.get("/api/login", (_req, res) => res.redirect("/auth"));
+    app.get("/api/callback", (_req, res) => res.redirect("/auth"));
+    app.get("/api/logout", (req, res) => {
+      req.logout(() => res.redirect("/"));
+    });
+    return;
+  }
+
   const config = await getOidcConfig();
 
   const verify: VerifyFunction = async (
@@ -99,14 +120,6 @@ export async function setupAuth(app: Express) {
     }
   };
 
-  passport.serializeUser((user: Express.User, cb) => cb(null, user));
-  passport.deserializeUser((user: Express.User, cb) => {
-    if (!user || typeof user !== 'object') {
-      return cb(null, false);
-    }
-    cb(null, user);
-  });
-
   app.get("/api/login", (req, res, next) => {
     ensureStrategy(req.hostname);
     passport.authenticate(`replitauth:${req.hostname}`, {
@@ -136,6 +149,29 @@ export async function setupAuth(app: Express) {
 }
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
+  // Native app: Authorization: Bearer <access token>. Populates req.user in the same shape as
+  // the session user so every route keeps reading (req.user as any).claims.sub.
+  const bearer = extractBearer(req.headers.authorization);
+  if (bearer) {
+    try {
+      const claims = await verifyAccessToken(bearer);
+      // Deleted accounts lose access immediately, not when the 15-minute token expires.
+      if (!(await authStorage.getUser(claims.sub))) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      (req as any).user = {
+        claims: { sub: claims.sub, email: claims.email },
+        expires_at: claims.exp,
+        access_token: null,
+        refresh_token: null,
+        viaBearer: true,
+      };
+      return next();
+    } catch {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+  }
+
   const user = req.user as any;
 
   if (!req.isAuthenticated() || !user.expires_at) {

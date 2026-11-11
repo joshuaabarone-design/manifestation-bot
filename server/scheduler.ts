@@ -1,6 +1,7 @@
 // Affirmation SMS Scheduler
 import { storage } from "./storage";
-import { sendSMS } from "./twilio";
+import { sendSMS, SMS_FOOTER } from "./twilio";
+import { screenOutput } from "./ai-safety";
 import OpenAI from "openai";
 
 const openai = new OpenAI({
@@ -27,7 +28,9 @@ async function generateAffirmation(): Promise<string> {
       max_tokens: 100
     });
 
-    return response.choices[0].message.content?.trim() || "I am worthy of all the abundance the universe has to offer.";
+    const text = response.choices[0].message.content?.trim() || "I am worthy of all the abundance the universe has to offer.";
+    const screened = await screenOutput(text);
+    return screened.flagged ? "I am worthy of all the abundance the universe has to offer." : screened.text;
   } catch (error) {
     console.error("[scheduler] Error generating affirmation:", error);
     return "I am worthy of all the abundance the universe has to offer.";
@@ -64,6 +67,10 @@ async function processReminders() {
       if (!settings.isEnabled || settings.deliveryMethod !== 'sms' || !settings.phoneNumber) {
         continue;
       }
+      // Explicit opt-in consent is required, and STOP replies are honored.
+      if (!settings.smsConsentAt || settings.smsOptedOutAt) {
+        continue;
+      }
 
       const timezone = settings.timezone || 'America/New_York';
       const reminderTime = settings.reminderTime || '09:00';
@@ -80,7 +87,7 @@ async function processReminders() {
         console.log(`[scheduler] Sending affirmation to ${settings.userId}`);
         
         const affirmation = await generateAffirmation();
-        const result = await sendSMS(settings.phoneNumber, `Your daily affirmation:\n\n${affirmation}`);
+        const result = await sendSMS(settings.phoneNumber, `Your daily affirmation:\n\n${affirmation}\n\n${SMS_FOOTER}`);
         
         if (result.success) {
           await storage.updateReminderLastSent(settings.userId);

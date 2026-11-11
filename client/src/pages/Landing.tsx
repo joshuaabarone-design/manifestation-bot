@@ -1,3 +1,4 @@
+import { isNative } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import { Sparkles, Star, Moon, Download, Share, Mail } from "lucide-react";
@@ -28,7 +29,8 @@ export default function Landing() {
   }, []);
 
   const handleLogin = () => {
-    window.location.href = "/api/login";
+    // Replit Auth is web-only; the iOS app uses its own sign-in screen.
+    window.location.href = isNative ? "/auth" : "/api/login";
   };
 
   const handleInstall = async () => {
@@ -114,7 +116,7 @@ export default function Landing() {
             </Button>
           </Link>
           
-          {(deferredPrompt || isIOS) && (
+          {!isNative && (deferredPrompt || isIOS) && (
             <Button onClick={handleInstall} variant="outline" size="lg" className="w-full sm:w-auto px-8 border-white/20 text-white hover:bg-white/10" data-testid="button-install-app">
               <Download className="mr-2 h-5 w-5" />
               {isIOS ? "Add to iPhone" : "Install App"}

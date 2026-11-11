@@ -1,0 +1,50 @@
+# Optional manual iOS build. workflow_dispatch only: it never runs on push or PR.
+name: iOS (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "Fastlane lane to run"
+        required: true
+        default: "beta"
+        type: choice
+        options: [beta, release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-manual
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: ios/App
+      - name: Fastlane ${{ inputs.lane }}
+        working-directory: ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          ASC_KEY_IS_BASE64: ${{ secrets.ASC_KEY_IS_BASE64 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_IDENTIFIER: ${{ vars.APP_IDENTIFIER }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_APPLE_SERVICES_ID: ${{ vars.VITE_APPLE_SERVICES_ID }}
+          VITE_APPLE_BUNDLE_ID: ${{ vars.APP_IDENTIFIER }}
+          VITE_PRIVACY_POLICY_URL: ${{ vars.VITE_PRIVACY_POLICY_URL }}
+          VITE_SUPPORT_URL: ${{ vars.VITE_SUPPORT_URL }}
+        run: bundle exec fastlane ${{ inputs.lane }}

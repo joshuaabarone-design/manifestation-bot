@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ReportResponseButton } from "@/components/compliance/ReportResponseButton";
+import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout/Layout";
 import { useVisionBoard, useAddVisionBoardImage, useGenerateVisionBoardImage } from "@/hooks/use-vision-boards";
 import { useRoute } from "wouter";
@@ -49,8 +51,15 @@ export default function VisionBoardDetail() {
               alt={img.caption || "Vision board image"} 
               className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" 
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity p-4 flex items-end">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity p-4 flex items-end justify-between gap-2">
               <p className="text-white font-medium">{img.caption}</p>
+              <ReportResponseButton
+                feature="image"
+                className="text-white/70 shrink-0"
+                content={`Vision board image. Caption/prompt: ${img.caption ?? "(none)"}. Source: ${
+                  img.imageUrl.startsWith("data:") ? "generated image (inline)" : img.imageUrl
+                }`}
+              />
             </div>
           </motion.div>
         ))}
@@ -93,7 +102,10 @@ function AddImageDialog({ boardId, trigger }: { boardId: number, trigger?: React
             setPrompt("");
           }
         });
-      }
+      },
+      onError: (error: Error) => {
+        toast({ title: "Couldn't create the image", description: error.message, variant: "destructive" });
+      },
     });
   };
 

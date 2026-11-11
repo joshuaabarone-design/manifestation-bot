@@ -8,6 +8,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Sparkles, Mail, Lock, User, ArrowLeft } from "lucide-react";
+import { handleAuthResponse } from "@/lib/api";
+import { isNative } from "@/lib/platform";
+import { appleSignInAvailable, signInWithApple } from "@/lib/apple";
+import { WellnessDisclaimer } from "@/components/compliance/WellnessDisclaimer";
+
+function cleanError(error: any, fallback: string): string {
+  const raw = String(error?.message ?? "");
+  const json = raw.replace(/^\d+:\s*/, "");
+  try {
+    return JSON.parse(json).message || fallback;
+  } catch {
+    return json || fallback;
+  }
+}
 
 export default function AuthPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -22,7 +36,7 @@ export default function AuthPage() {
 
   const loginMutation = useMutation({
     mutationFn: async (data: { email: string; password: string }) => {
-      return apiRequest("POST", "/api/auth/login", data);
+      return handleAuthResponse(await apiRequest("POST", "/api/auth/login", data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
@@ -31,7 +45,7 @@ export default function AuthPage() {
     onError: (error: any) => {
       toast({
         title: "Login failed",
-        description: error?.message || "Invalid email or password",
+        description: cleanError(error, "Invalid email or password"),
         variant: "destructive",
       });
     },
@@ -39,7 +53,7 @@ export default function AuthPage() {
 
   const registerMutation = useMutation({
     mutationFn: async (data: { email: string; password: string; firstName?: string; lastName?: string }) => {
-      return apiRequest("POST", "/api/auth/register", data);
+      return handleAuthResponse(await apiRequest("POST", "/api/auth/register", data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
@@ -48,9 +62,22 @@ export default function AuthPage() {
     onError: (error: any) => {
       toast({
         title: "Registration failed",
-        description: error?.message || "Could not create account",
+        description: cleanError(error, "Could not create account"),
         variant: "destructive",
       });
+    },
+  });
+
+  const appleMutation = useMutation({
+    mutationFn: signInWithApple,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      setLocation("/");
+    },
+    onError: (error: any) => {
+      // Closing the Apple sheet is not an error worth showing.
+      if (/cancel|1001/i.test(String(error?.message ?? error?.code ?? ""))) return;
+      toast({ title: "Sign in with Apple failed", description: cleanError(error, "Please try again."), variant: "destructive" });
     },
   });
 
@@ -63,7 +90,7 @@ export default function AuthPage() {
     }
   };
 
-  const isLoading = loginMutation.isPending || registerMutation.isPending;
+  const isLoading = loginMutation.isPending || registerMutation.isPending || appleMutation.isPending;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-purple-950/20 to-background flex items-center justify-center p-4">
@@ -187,26 +214,48 @@ export default function AuthPage() {
               </p>
             </div>
 
-            <div className="mt-6">
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t border-white/10" />
+            {(appleSignInAvailable || !isNative) && (
+              <div className="mt-6">
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-white/10" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">Or continue with</span>
+                  </div>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">Or continue with</span>
-                </div>
-              </div>
 
-              <Button
-                variant="outline"
-                className="w-full mt-4"
-                onClick={() => window.location.href = "/api/login"}
-                data-testid="button-replit-auth"
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                Sign in with Replit
-              </Button>
-            </div>
+                {appleSignInAvailable && (
+                  // Apple HIG: black or white button with the Apple logo, same size as other options.
+                  <button
+                    type="button"
+                    onClick={() => appleMutation.mutate()}
+                    disabled={isLoading}
+                    className="w-full mt-4 h-11 rounded-lg bg-white text-black font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                    data-testid="button-apple-auth"
+                  >
+                    {/* U+F8FF renders the Apple logo on Apple platforms (where this button appears). */}
+                    <span aria-hidden="true" className="text-lg leading-none">{"\uF8FF"}</span>
+                    Sign in with Apple
+                  </button>
+                )}
+
+                {/* Replit Auth stays on the web only; it is hidden inside the iOS app. */}
+                {!isNative && (
+                  <Button
+                    variant="outline"
+                    className="w-full mt-4"
+                    onClick={() => (window.location.href = "/api/login")}
+                    data-testid="button-replit-auth"
+                  >
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Sign in with Replit
+                  </Button>
+                )}
+              </div>
+            )}
+
+            <WellnessDisclaimer className="mt-6" compact />
           </CardContent>
         </Card>
       </div>

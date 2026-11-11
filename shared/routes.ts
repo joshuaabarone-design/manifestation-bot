@@ -114,6 +114,9 @@ export const api = {
       responses: {
         200: z.object({
           affirmation: z.string(),
+          crisis: z.boolean().optional(),
+          moderated: z.boolean().optional(),
+          resources: z.array(z.object({ name: z.string(), contact: z.string(), url: z.string().optional() })).optional(),
         }),
         401: errorSchemas.unauthorized,
       },
@@ -210,6 +213,10 @@ export const api = {
           advice: z.string(),
           suggestedAffirmations: z.array(z.string()),
           suggestedActions: z.array(z.string()),
+          nextSteps: z.array(z.string()).optional(),
+          crisis: z.boolean().optional(),
+          moderated: z.boolean().optional(),
+          resources: z.array(z.object({ name: z.string(), contact: z.string(), url: z.string().optional() })).optional(),
         }),
         401: errorSchemas.unauthorized,
       },
@@ -227,7 +234,10 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/reminders/settings',
-      input: insertReminderSettingsSchema.partial(),
+      input: insertReminderSettingsSchema.partial().extend({
+        // Required (true) when switching delivery to SMS; records consent time and wording.
+        smsConsent: z.boolean().optional(),
+      }),
       responses: {
         200: z.custom<typeof reminderSettings.$inferSelect>(),
         400: errorSchemas.validation,
@@ -360,6 +370,24 @@ export const api = {
 };
 
 // ============================================
+// iOS / APP STORE COMPLIANCE ENDPOINTS
+// ============================================
+export const complianceApi = {
+  deleteAccount: { method: 'DELETE' as const, path: '/api/account' },
+  aiConsent: { method: 'POST' as const, path: '/api/ai/consent' },
+  aiReport: { method: 'POST' as const, path: '/api/ai/reports' },
+  adminAiReports: { method: 'GET' as const, path: '/api/admin/ai-reports' },
+  tokenRefresh: { method: 'POST' as const, path: '/api/auth/refresh' },
+  appleSignIn: { method: 'POST' as const, path: '/api/auth/apple' },
+  smsInbound: { method: 'POST' as const, path: '/api/sms/inbound' },
+};
+
+/** Exact consent wording shown next to the SMS checkbox and stored with the consent record. */
+export const SMS_CONSENT_TEXT =
+  "I agree to receive one recurring automated affirmation text message per day at the number provided. " +
+  "Consent is not a condition of use. Msg & data rates may apply. Reply STOP to cancel, HELP for help.";
+
+// ============================================
 // HELPER
 // ============================================
 export function buildUrl(path: string, params?: Record<string, string | number>): string {
@@ -373,3 +401,9 @@ export function buildUrl(path: string, params?: Record<string, string | number>)
   }
   return url;
 }
+
+// Request types re-exported for the client hooks.
+export type {
+  CreateAffirmationRequest, GenerateAffirmationRequest, CreateGoalRequest, UpdateGoalRequest,
+  CreateJournalEntryRequest, CreateVisionBoardRequest, AddVisionBoardImageRequest,
+} from "./schema";

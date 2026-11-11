@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Layout } from "@/components/layout/Layout";
 import { useManifestationAdvice } from "@/hooks/use-manifestation";
+import { ensureAiConsent } from "@/lib/ai";
+import { ReportResponseButton } from "@/components/compliance/ReportResponseButton";
+import { CrisisResources } from "@/components/compliance/CrisisDialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Sparkles, MessageSquare, ListTodo, Lightbulb, Plus, BookOpen, Check, History, Trash2, Send } from "lucide-react";
@@ -100,7 +103,15 @@ export default function ManifestationChat() {
     e.preventDefault();
     setSavedAffirmations(new Set());
     setJournalSaved(false);
-    
+
+    // Ask for AI consent before anything is sent or stored.
+    try {
+      await ensureAiConsent();
+    } catch (err) {
+      toast({ title: "AI guidance is off", description: (err as Error).message });
+      return;
+    }
+
     let conversationId = activeConversationId;
     
     if (!conversationId) {
@@ -122,7 +133,10 @@ export default function ManifestationChat() {
           const assistantContent = `**Guidance:**\n${data.advice}\n\n**Affirmations:**\n${data.suggestedAffirmations.map(a => `• "${a}"`).join("\n")}\n\n**Action Steps:**\n${data.suggestedActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}`;
           await addMessageMutation.mutateAsync({ conversationId, role: "assistant", content: assistantContent });
         }
-      }
+      },
+      onError: (error: Error) => {
+        toast({ title: "Couldn't get guidance", description: error.message, variant: "destructive" });
+      },
     });
   };
 
@@ -302,6 +316,17 @@ export default function ManifestationChat() {
                 <p className="text-sm lg:text-base text-muted-foreground leading-relaxed whitespace-pre-wrap">
                   {advice.advice}
                 </p>
+                {advice.crisis && (
+                  <div className="mt-4">
+                    <CrisisResources resources={advice.resources} />
+                  </div>
+                )}
+                <div className="mt-3 flex justify-end">
+                  <ReportResponseButton
+                    feature="advice"
+                    content={[advice.advice, ...advice.suggestedAffirmations, ...advice.suggestedActions].join("\n")}
+                  />
+                </div>
               </div>
 
               <div className="glass-panel p-4 lg:p-6 rounded-2xl">
@@ -362,6 +387,11 @@ export default function ManifestationChat() {
                       {msg.role === 'user' ? 'You' : 'Soul Guide'}
                     </p>
                     <p className="text-sm text-muted-foreground whitespace-pre-wrap">{msg.content}</p>
+                    {msg.role !== 'user' && (
+                      <div className="mt-2 flex justify-end">
+                        <ReportResponseButton feature="chat" content={msg.content} />
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
