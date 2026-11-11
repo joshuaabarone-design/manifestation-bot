@@ -1,4 +1,7 @@
-const AGENTFORGE_BASE_URL = "https://2c3035d7-d662-4049-945d-8792c12b7c65-00-2422uhh2w3n9i.picard.replit.dev/api/agents";
+// Configure with AGENTFORGE_BASE_URL (e.g. https://<host>/api/agents). The legacy Replit dev URL is
+// kept only as a fallback; every caller already degrades to built-in prompts if AgentForge is unreachable.
+const LEGACY_AGENTFORGE_BASE_URL = "https://2c3035d7-d662-4049-945d-8792c12b7c65-00-2422uhh2w3n9i.picard.replit.dev/api/agents";
+const AGENTFORGE_BASE_URL = (process.env.AGENTFORGE_BASE_URL || LEGACY_AGENTFORGE_BASE_URL).replace(/\/+$/, "");
 
 // Agent IDs for the manifestation app
 export const AGENT_IDS = {

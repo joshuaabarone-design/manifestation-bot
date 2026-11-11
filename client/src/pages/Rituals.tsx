@@ -3,6 +3,7 @@ import { Layout } from "@/components/layout/Layout";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { haptic } from "@/lib/native";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Sun, Moon, Repeat, Check, Play, Clock, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -108,6 +109,7 @@ export default function Rituals() {
       return apiRequest("POST", `/api/rituals/${ritualId}/complete`, {});
     },
     onSuccess: () => {
+      haptic("success");
       queryClient.invalidateQueries({ queryKey: ["/api/rituals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/streaks"] });
       setActiveRitual(null);

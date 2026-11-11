@@ -17,7 +17,7 @@ import {
 
 export function Sidebar() {
   const [location] = useLocation();
-  const { logout, user } = useAuth();
+  const { logout, user, isAdmin } = useAuth();
 
   const links = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -27,7 +27,8 @@ export function Sidebar() {
     { href: "/vision-board", label: "Vision Board", icon: ImageIcon },
     { href: "/rituals", label: "Rituals", icon: Sun },
     { href: "/chat", label: "Advice", icon: SquareUser },
-    { href: "/training", label: "Training", icon: Brain },
+    // Admin-only (users.is_admin); hidden from consumers.
+    ...(isAdmin ? [{ href: "/training", label: "Training", icon: Brain }] : []),
     { href: "/settings", label: "Settings", icon: Settings },
   ];
 

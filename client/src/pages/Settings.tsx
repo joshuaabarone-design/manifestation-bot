@@ -10,7 +10,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, Clock, Loader2, Smartphone, MessageSquare } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { ReminderSettings } from "@shared/schema";
+import { SMS_CONSENT_TEXT } from "@shared/routes";
+import { isNative } from "@/lib/platform";
+import { scheduleAffirmationReminders } from "@/lib/native/notifications";
+import { useAffirmations } from "@/hooks/use-affirmations";
+import { haptic } from "@/lib/native";
+import { AccountSection } from "@/components/settings/AccountSection";
 
 const TIMEZONES = [
   { value: "America/New_York", label: "Eastern Time (ET)" },
@@ -42,28 +49,47 @@ const REMINDER_TIMES = [
 export default function Settings() {
   const { toast } = useToast();
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [smsConsentChecked, setSmsConsentChecked] = useState(false);
+  const [smsFormOpen, setSmsFormOpen] = useState(false);
+  const { data: affirmations } = useAffirmations();
 
   const { data: settings, isLoading } = useQuery<ReminderSettings | null>({
     queryKey: ["/api/reminders/settings"],
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (updates: Partial<ReminderSettings>) => {
-      return apiRequest("PUT", "/api/reminders/settings", updates);
+    mutationFn: async (updates: Partial<ReminderSettings> & { smsConsent?: boolean }) => {
+      const res = await apiRequest("PUT", "/api/reminders/settings", updates);
+      return (await res.json()) as ReminderSettings;
     },
-    onSuccess: () => {
+    onSuccess: async (saved) => {
+      queryClient.setQueryData(["/api/reminders/settings"], saved);
       queryClient.invalidateQueries({ queryKey: ["/api/reminders/settings"] });
+      haptic("success");
+      // iOS: reminders are scheduled on-device as local notifications.
+      if (isNative) {
+        const granted = await scheduleAffirmationReminders(saved, affirmations ?? [], { prompt: true }).catch(() => false);
+        if (!granted && saved?.isEnabled) {
+          toast({
+            title: "Notifications are turned off",
+            description: "Allow notifications for Manifest in iOS Settings to get your daily reminder.",
+          });
+          return;
+        }
+      }
       toast({
         title: "Settings saved",
         description: "Your reminder preferences have been updated.",
       });
     },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to save settings. Please try again.",
-        variant: "destructive",
-      });
+    onError: (error: any) => {
+      let description = "Failed to save settings. Please try again.";
+      try {
+        description = JSON.parse(String(error?.message).replace(/^\d+:\s*/, "")).message || description;
+      } catch {
+        /* keep default */
+      }
+      toast({ title: "Error", description, variant: "destructive" });
     },
   });
 
@@ -80,6 +106,12 @@ export default function Settings() {
   };
 
   const handleDeliveryMethodChange = (method: string) => {
+    if (method === "sms" && !(settings?.smsConsentAt && !settings?.smsOptedOutAt)) {
+      // SMS needs a phone number and explicit consent first; nothing is saved until both are given.
+      setSmsFormOpen(true);
+      return;
+    }
+    setSmsFormOpen(false);
     updateMutation.mutate({ deliveryMethod: method });
   };
 
@@ -92,7 +124,23 @@ export default function Settings() {
       });
       return;
     }
-    updateMutation.mutate({ phoneNumber, deliveryMethod: "sms" });
+    if (!smsConsentChecked) {
+      toast({
+        title: "Consent needed",
+        description: "Please tick the box to agree to receive text messages.",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateMutation.mutate(
+      { phoneNumber, deliveryMethod: "sms", smsConsent: true },
+      { onSuccess: () => setSmsFormOpen(false) },
+    );
+  };
+
+  const handleSmsOptOut = () => {
+    setSmsConsentChecked(false);
+    updateMutation.mutate({ deliveryMethod: "app", smsConsent: false });
   };
 
   if (isLoading) {
@@ -126,7 +174,7 @@ export default function Settings() {
             Settings
           </h1>
           <p className="text-muted-foreground">
-            Manage your daily affirmation reminders
+            Manage reminders, AI preferences and your account
           </p>
         </div>
 
@@ -171,7 +219,7 @@ export default function Settings() {
                     Delivery Method
                   </Label>
                   <Select
-                    value={currentSettings.deliveryMethod ?? "app"}
+                    value={smsFormOpen ? "sms" : (currentSettings.deliveryMethod ?? "app")}
                     onValueChange={handleDeliveryMethodChange}
                     disabled={updateMutation.isPending}
                   >
@@ -179,13 +227,13 @@ export default function Settings() {
                       <SelectValue placeholder="Select delivery method" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="app">In-App Only</SelectItem>
+                      <SelectItem value="app">{isNative ? "Notification on this iPhone" : "In-App Only"}</SelectItem>
                       <SelectItem value="sms">SMS Text Message</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
-                {currentSettings.deliveryMethod === "sms" && (
+                {(currentSettings.deliveryMethod === "sms" || smsFormOpen) && (
                   <div className="space-y-2">
                     <Label htmlFor="phone-number" className="text-base flex items-center gap-2">
                       <Smartphone className="h-4 w-4" />
@@ -212,10 +260,36 @@ export default function Settings() {
                     <p className="text-xs text-muted-foreground">
                       Enter your phone number with country code to receive daily affirmations via SMS
                     </p>
-                    {currentSettings.phoneNumber && (
-                      <p className="text-xs text-green-600">
-                        Currently set to: {currentSettings.phoneNumber}
+                    <div className="flex items-start gap-2 pt-1">
+                      <Checkbox
+                        id="sms-consent"
+                        data-testid="checkbox-sms-consent"
+                        checked={smsConsentChecked}
+                        onCheckedChange={(v) => setSmsConsentChecked(v === true)}
+                      />
+                      <Label htmlFor="sms-consent" className="text-xs font-normal leading-snug text-muted-foreground">
+                        {SMS_CONSENT_TEXT}
+                      </Label>
+                    </div>
+                    {settings?.smsOptedOutAt && (
+                      <p className="text-xs text-amber-500">
+                        You replied STOP, so texts are paused. Save your number with consent again to resume.
                       </p>
+                    )}
+                    {currentSettings.phoneNumber && settings?.smsConsentAt && !settings?.smsOptedOutAt && (
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs text-green-600">
+                          Texts go to: {currentSettings.phoneNumber}
+                        </p>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline"
+                          onClick={handleSmsOptOut}
+                          data-testid="button-sms-optout"
+                        >
+                          Stop text messages
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -244,7 +318,9 @@ export default function Settings() {
                   <p className="text-xs text-muted-foreground">
                     {currentSettings.deliveryMethod === "sms" 
                       ? "You'll receive your daily affirmation via SMS at this time"
-                      : "When you open the app around this time, you'll see your daily affirmation"}
+                      : isNative
+                        ? "You'll get a notification with one of your affirmations at this time"
+                        : "When you open the app around this time, you'll see your daily affirmation"}
                   </p>
                 </div>
 
@@ -283,19 +359,29 @@ export default function Settings() {
               <strong>In-App:</strong> When you open the app around your scheduled time, 
               you'll see a beautiful daily affirmation modal.
             </p>
+            {isNative && (
+              <p>
+                <strong>Notifications:</strong> On iPhone, your reminder is scheduled on this device, so it
+                arrives even when you're offline.
+              </p>
+            )}
             <p>
-              <strong>SMS:</strong> Receive your daily affirmation as a text message 
-              at your scheduled time. Perfect for starting your morning right!
+              <strong>SMS:</strong> Receive your daily affirmation as a text message
+              at your scheduled time, only after you opt in. Reply STOP at any time to cancel, HELP for help.
             </p>
             <p>
               Each affirmation is AI-generated to help keep you aligned with your 
               manifestation journey.
             </p>
-            <p className="text-xs italic">
-              Tip: Add this app to your home screen for quick access.
-            </p>
+            {!isNative && (
+              <p className="text-xs italic">
+                Tip: Add this app to your home screen for quick access.
+              </p>
+            )}
           </CardContent>
         </Card>
+
+        <AccountSection />
       </div>
     </Layout>
   );

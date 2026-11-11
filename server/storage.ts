@@ -131,8 +131,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createJournalEntry(entry: InsertJournalEntry): Promise<JournalEntry> {
-    const [newEntry] = await db.insert(journalEntries).values(entry).returning();
-    return newEntry;
+    // clientId makes offline-queued writes from the iOS app idempotent on replay.
+    if (entry.clientId) {
+      const [existing] = await db.select().from(journalEntries)
+        .where(and(eq(journalEntries.userId, entry.userId), eq(journalEntries.clientId, entry.clientId)));
+      if (existing) return existing;
+    }
+    const [newEntry] = await db.insert(journalEntries).values(entry).onConflictDoNothing().returning();
+    if (newEntry) return newEntry;
+    const [raced] = await db.select().from(journalEntries)
+      .where(and(eq(journalEntries.userId, entry.userId), eq(journalEntries.clientId, entry.clientId!)));
+    return raced;
   }
 
   // Vision Boards

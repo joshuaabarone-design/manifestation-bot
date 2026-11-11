@@ -21,6 +21,11 @@ import AuthPage from "@/pages/AuthPage";
 import Rituals from "@/pages/Rituals";
 import Training from "@/pages/Training";
 import { InstallPrompt } from "@/components/InstallPrompt";
+import { AiConsentDialog } from "@/components/compliance/AiConsentDialog";
+import { CrisisDialog } from "@/components/compliance/CrisisDialog";
+import { WelcomeDisclaimer } from "@/components/compliance/WelcomeDisclaimer";
+import { ReminderSync } from "@/components/native/ReminderSync";
+import { isNative } from "@/lib/platform";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -42,6 +47,14 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   if (!isAuthenticated) return null;
 
+  return <Component />;
+}
+
+/** Admin-only pages (training dashboard). Consumers get the normal 404; the server also returns 404. */
+function AdminRoute({ component: Component }: { component: React.ComponentType }) {
+  const { isAdmin, isLoading, isAuthenticated } = useAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated || !isAdmin) return <NotFound />;
   return <Component />;
 }
 
@@ -85,7 +98,7 @@ function Router() {
         <ProtectedRoute component={Rituals} />
       </Route>
       <Route path="/training">
-        <ProtectedRoute component={Training} />
+        <AdminRoute component={Training} />
       </Route>
       <Route component={NotFound} />
     </Switch>
@@ -98,7 +111,12 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Router />
-        <InstallPrompt />
+        <AiConsentDialog />
+        <CrisisDialog />
+        <WelcomeDisclaimer />
+        <ReminderSync />
+        {/* "Add to Home Screen" is a web (PWA) feature; inside the iOS app it is not needed. */}
+        {!isNative && <InstallPrompt />}
       </TooltipProvider>
     </QueryClientProvider>
   );

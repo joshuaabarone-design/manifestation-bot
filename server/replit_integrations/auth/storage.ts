@@ -9,6 +9,9 @@ export interface IAuthStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   createLocalUser(userData: { email: string; passwordHash: string; firstName?: string; lastName?: string }): Promise<User>;
+  getUserByAppleSub(sub: string): Promise<User | undefined>;
+  upsertAppleUser(data: { sub: string; email?: string; emailVerified: boolean; firstName?: string | null; lastName?: string | null }): Promise<User>;
+  setAppleRefreshToken(userId: string, token: string): Promise<void>;
 }
 
 class AuthStorage implements IAuthStorage {
@@ -49,6 +52,38 @@ class AuthStorage implements IAuthStorage {
       })
       .returning();
     return user;
+  }
+
+  async getUserByAppleSub(sub: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.appleSub, sub));
+    return user;
+  }
+
+  /** Find by Apple subject; else link to an existing account with the same verified email; else create. */
+  async upsertAppleUser(data: { sub: string; email?: string; emailVerified: boolean; firstName?: string | null; lastName?: string | null }): Promise<User> {
+    const bySub = await this.getUserByAppleSub(data.sub);
+    if (bySub) return bySub;
+    if (data.email && data.emailVerified) {
+      const byEmail = await this.getUserByEmail(data.email);
+      if (byEmail) {
+        const [linked] = await db.update(users)
+          .set({ appleSub: data.sub, updatedAt: new Date() })
+          .where(eq(users.id, byEmail.id)).returning();
+        return linked;
+      }
+    }
+    const [created] = await db.insert(users).values({
+      email: data.email ?? null,
+      firstName: data.firstName ?? null,
+      lastName: data.lastName ?? null,
+      appleSub: data.sub,
+      authProvider: "apple",
+    }).returning();
+    return created;
+  }
+
+  async setAppleRefreshToken(userId: string, token: string): Promise<void> {
+    await db.update(users).set({ appleRefreshToken: token, updatedAt: new Date() }).where(eq(users.id, userId));
   }
 }
 

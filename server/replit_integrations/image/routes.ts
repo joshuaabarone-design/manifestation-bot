@@ -1,14 +1,16 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, RequestHandler } from "express";
+import { screenInput } from "../../ai-safety";
 import { openai } from "./client";
 
-export function registerImageRoutes(app: Express): void {
-  app.post("/api/generate-image", async (req: Request, res: Response) => {
+export function registerImageRoutes(app: Express, guard: RequestHandler[] = []): void {
+  app.post("/api/generate-image", ...guard, async (req: Request, res: Response) => {
     try {
       const { prompt, size = "1024x1024" } = req.body;
 
       if (!prompt) {
         return res.status(400).json({ error: "Prompt is required" });
       }
+      if (await screenInput(res, String(prompt))) return;
 
       const response = await openai.images.generate({
         model: "gpt-image-1",
@@ -17,7 +19,8 @@ export function registerImageRoutes(app: Express): void {
         size: size as "1024x1024" | "512x512" | "256x256",
       });
 
-      const imageData = response.data[0];
+      const imageData = response.data?.[0];
+      if (!imageData) return res.status(502).json({ error: "No image returned" });
       res.json({
         url: imageData.url,
         b64_json: imageData.b64_json,

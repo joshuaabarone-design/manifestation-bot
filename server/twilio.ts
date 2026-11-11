@@ -1,9 +1,43 @@
 // Twilio Integration for SMS reminders
 import twilio from 'twilio';
 
+/** Appended to every outbound reminder (CTIA: opt-out instructions in recurring messages). */
+export const SMS_FOOTER = 'Reply STOP to opt out, HELP for help.';
+
 let connectionSettings: any;
 
-async function getCredentials() {
+type TwilioCredentials = {
+  accountSid: string;
+  apiKey: string;
+  apiKeySecret: string;
+  phoneNumber?: string;
+};
+
+/**
+ * Credentials come from env first (any host):
+ *   TWILIO_ACCOUNT_SID + (TWILIO_API_KEY + TWILIO_API_KEY_SECRET | TWILIO_AUTH_TOKEN) + TWILIO_FROM_NUMBER
+ * and fall back to the Replit connector when running on Replit.
+ */
+function getEnvCredentials(): TwilioCredentials | null {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  if (!accountSid) return null;
+  const apiKey = process.env.TWILIO_API_KEY || accountSid;
+  const apiKeySecret = process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN;
+  if (!apiKeySecret) return null;
+  return { accountSid, apiKey, apiKeySecret, phoneNumber: process.env.TWILIO_FROM_NUMBER };
+}
+
+export function twilioConfigured(): boolean {
+  return !!getEnvCredentials() || !!process.env.REPLIT_CONNECTORS_HOSTNAME;
+}
+
+async function getCredentials(): Promise<TwilioCredentials> {
+  const fromEnv = getEnvCredentials();
+  if (fromEnv) return fromEnv;
+  return getReplitConnectorCredentials();
+}
+
+async function getReplitConnectorCredentials(): Promise<TwilioCredentials> {
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY 
     ? 'repl ' + process.env.REPL_IDENTITY 
@@ -71,6 +105,6 @@ export async function sendSMS(to: string, message: string): Promise<{ success: b
 }
 
 export async function sendAffirmationReminder(phoneNumber: string, affirmation: string): Promise<{ success: boolean; error?: string }> {
-  const message = `Your daily affirmation:\n\n"${affirmation}"\n\nTake a moment to breathe and believe in your manifestation journey.`;
+  const message = `Your daily affirmation:\n\n"${affirmation}"\n\nTake a moment to breathe and believe in your manifestation journey.\n\n${SMS_FOOTER}`;
   return sendSMS(phoneNumber, message);
 }
